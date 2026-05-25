@@ -18,6 +18,7 @@ Security posture:
 
 import asyncio
 import logging
+import os
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
@@ -365,3 +366,19 @@ async def trust_check(
 @app.get("/health", include_in_schema=False)
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Direct-execution entry point (development only)
+# ---------------------------------------------------------------------------
+# Production uses: gunicorn main:app --worker-class uvicorn.workers.UvicornWorker
+# This block is only reached via `python main.py` and reads PORT from the
+# environment so the same command works locally and on cloud platforms.
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        reload=False,
+    )
