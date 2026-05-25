@@ -18,3 +18,12 @@
 local.properties
 /release-stuff
 /.kotlin
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
