@@ -1,24 +1,26 @@
 """
-Behavioral Trust Score API — Phase 2: Behavioral Scoring Engine
-----------------------------------------------------------------
+Behavioral Trust Score API — Phase 3: Monetization & Access Control
+--------------------------------------------------------------------
 Security posture:
-  • CORS is restricted to an explicit allowlist; wildcard origins are
-    intentionally excluded to prevent cross-origin data leakage.
-  • All unhandled exceptions are caught by a global handler that returns
-    a generic 500 body so raw tracebacks never reach the client.
-  • Pydantic v2 models enforce strict type coercion at the boundary;
-    malformed payloads are rejected with a 422 before any business logic runs.
-  • The nonce field is present at the model layer; stateful anti-replay
-    enforcement (Redis TTL set) is wired in Phase 3.
-  • Scoring logic lives in evaluator.py; this file stays routing-focused.
+  • API key authentication via X-API-Key header guards the scored endpoint.
+    Missing or unrecognised keys return 401 before any evaluation logic runs.
+  • Keys are compared with secrets.compare_digest (constant-time) to prevent
+    timing-oracle attacks; all keys in the registry are always checked so the
+    iteration count does not reveal whether any key was close to valid.
+  • CORS allows X-API-Key in preflight so browser-based clients (Swagger UI,
+    web dashboards) can authenticate correctly alongside mobile clients.
+  • Remaining posture from Phase 2 is unchanged (allowlist CORS, global
+    exception handler, StrictBool telemetry validation, separate evaluator).
 """
 
 import logging
+import secrets
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
 from evaluator import evaluate_trust
@@ -31,6 +33,52 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("trust_api")
+
+# ---------------------------------------------------------------------------
+# API key registry (MVP: hardcoded — move to database for production)
+# ---------------------------------------------------------------------------
+# Keys map  api_key_value → human-readable client label.
+# The label is used for audit logging and will drive per-client billing in
+# Phase 4.  Never log or return the raw key value itself.
+VALID_API_KEYS: dict[str, str] = {
+    "dev_test_key_123": "Test Client A",
+    "dev_test_key_456": "Test Client B",
+}
+
+# auto_error=False so FastAPI passes None instead of raising a 403 when the
+# header is absent; we raise our own 401 in verify_api_key below.
+_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(
+    api_key: str | None = Security(_API_KEY_HEADER),
+) -> str:
+    """
+    FastAPI dependency that enforces API key authentication.
+
+    Iterates every registered key with secrets.compare_digest so the loop
+    runs in constant time regardless of which key matches (or doesn't),
+    preventing timing-oracle attacks from probing the key space.
+
+    Returns the client label on success; raises 401 on any failure.
+    """
+    candidate = api_key or ""
+    matched_client: str | None = None
+
+    for key, client in VALID_API_KEYS.items():
+        # Always compare all entries — no early exit — to keep timing uniform.
+        if secrets.compare_digest(candidate.encode(), key.encode()):
+            matched_client = client
+
+    if matched_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    logger.info("Authenticated client: %s", matched_client)
+    return matched_client
 
 # ---------------------------------------------------------------------------
 # Application factory
@@ -58,7 +106,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,          # No cookies / auth headers via CORS
     allow_methods=["POST"],           # Only the methods this API exposes
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 # ---------------------------------------------------------------------------
@@ -138,15 +186,23 @@ class TrustCheckResponse(BaseModel):
     summary="Evaluate device trust score",
     response_description="Trust evaluation result for the submitted device signal.",
 )
-async def trust_check(payload: TrustCheckRequest) -> TrustCheckResponse:
+async def trust_check(
+    payload: TrustCheckRequest,
+    client_name: str = Depends(verify_api_key),
+) -> TrustCheckResponse:
     """
     Accepts a device attestation payload and returns a trust score verdict.
 
+    - **X-API-Key** header: registered API key (required).
     - **device_integrity_token**: Base64-encoded JSON telemetry blob.
     - **app_package_name**: the calling app's package identifier.
-    - **nonce**: random value to prevent replay attacks (stateful enforcement Phase 3).
+    - **nonce**: random value to prevent replay attacks (stateful enforcement Phase 4).
     """
-    logger.info("Trust evaluation requested for package=%s", payload.app_package_name)
+    logger.info(
+        "Trust evaluation requested by client=%s for package=%s",
+        client_name,
+        payload.app_package_name,
+    )
 
     result = evaluate_trust(payload.device_integrity_token)
 
