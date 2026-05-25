@@ -1,6 +1,6 @@
 """
-Behavioral Trust Score API — Phase 1: Minimalist Secure Fundament
------------------------------------------------------------------
+Behavioral Trust Score API — Phase 2: Behavioral Scoring Engine
+----------------------------------------------------------------
 Security posture:
   • CORS is restricted to an explicit allowlist; wildcard origins are
     intentionally excluded to prevent cross-origin data leakage.
@@ -8,8 +8,9 @@ Security posture:
     a generic 500 body so raw tracebacks never reach the client.
   • Pydantic v2 models enforce strict type coercion at the boundary;
     malformed payloads are rejected with a 422 before any business logic runs.
-  • The nonce field is present at the model layer (Phase 1 foundation);
-    stateful anti-replay enforcement (e.g. Redis TTL set) is wired in Phase 2.
+  • The nonce field is present at the model layer; stateful anti-replay
+    enforcement (Redis TTL set) is wired in Phase 3.
+  • Scoring logic lives in evaluator.py; this file stays routing-focused.
 """
 
 import logging
@@ -19,6 +20,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+
+from evaluator import evaluate_trust
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -126,31 +129,6 @@ class TrustCheckResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Trust evaluation (mock — Phase 1)
-# ---------------------------------------------------------------------------
-def _evaluate_trust(payload: TrustCheckRequest) -> TrustCheckResponse:
-    """
-    Phase 1 mock evaluator.
-
-    In Phase 2+ this function will:
-      1. Verify the device_integrity_token against the platform attestation
-         service (Google Play Integrity / Apple DeviceCheck).
-      2. Enforce nonce uniqueness via a short-lived Redis set to block replays.
-      3. Feed behavioural signals into a scoring model.
-    """
-    logger.info(
-        "Trust evaluation requested for package=%s", payload.app_package_name
-    )
-
-    return TrustCheckResponse(
-        status="success",
-        trust_score=1.0,
-        verdict="CLEAN_ENVIRONMENT",
-        timestamp=datetime.now(timezone.utc).isoformat(),
-    )
-
-
-# ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 @app.post(
@@ -164,11 +142,20 @@ async def trust_check(payload: TrustCheckRequest) -> TrustCheckResponse:
     """
     Accepts a device attestation payload and returns a trust score verdict.
 
-    - **device_integrity_token**: platform-issued integrity token.
+    - **device_integrity_token**: Base64-encoded JSON telemetry blob.
     - **app_package_name**: the calling app's package identifier.
-    - **nonce**: random value to prevent replay attacks.
+    - **nonce**: random value to prevent replay attacks (stateful enforcement Phase 3).
     """
-    return _evaluate_trust(payload)
+    logger.info("Trust evaluation requested for package=%s", payload.app_package_name)
+
+    result = evaluate_trust(payload.device_integrity_token)
+
+    return TrustCheckResponse(
+        status="success",
+        trust_score=result.trust_score,
+        verdict=result.verdict,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 # ---------------------------------------------------------------------------
