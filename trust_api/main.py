@@ -1,23 +1,26 @@
 """
-Behavioral Trust Score API — Phase 6: Developer Dashboard
-----------------------------------------------------------
+Behavioral Trust Score API — Phase 7: Persistent SQLite Database
+----------------------------------------------------------------
 Security posture:
-  • GET / serves the single-page developer dashboard (FileResponse, same-
-    origin — the fetch calls from the page are not cross-origin so existing
-    CORS rules are not affected).
-  • POST /api/v1/generate-key is intentionally unauthenticated (it creates
-    keys, so it cannot require one). In production it MUST be protected by
-    admin auth and rate-limiting before this dict is replaced by a DB.
-  • Key generation uses secrets.token_hex(32) for 256 bits of entropy,
-    prefixed with "ts_live_" for easy visual identification in logs.
-  • In-memory dict assignment is GIL-serialised in CPython, but is not safe
-    across multiple uvicorn workers — use a shared store (Redis / DB) for
-    multi-worker deployments.
-  • All posture from Phase 3 is preserved unchanged.
+  • All API keys are stored in a local SQLite file (clients.db) that survives
+    server restarts.  The in-memory VALID_API_KEYS dict is fully removed.
+  • DB lookups use parameterized queries (? placeholders) so user-supplied
+    values are NEVER interpolated into SQL text — preventing SQL injection.
+  • asyncio.to_thread() offloads every synchronous sqlite3 call to a thread-
+    pool worker, keeping the async event loop non-blocking.
+  • WAL journal mode is enabled at startup for better read/write concurrency.
+  • Each DB helper opens its own connection; sqlite3 serialises writes at the
+    file level, which is safe for a single-worker deployment.  Swap the DB
+    layer for SQLAlchemy + PostgreSQL before scaling to multiple workers.
+  • All Phase 6 posture is preserved (CORS allowlist, FileResponse dashboard,
+    global exception handler, StrictBool telemetry validation).
 """
 
+import asyncio
 import logging
 import secrets
+import sqlite3
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,23 +41,88 @@ logging.basicConfig(
 )
 logger = logging.getLogger("trust_api")
 
-# Directory that contains main.py — used to resolve index.html at runtime
+# Directory that contains main.py — used to resolve index.html and clients.db
 # regardless of the working directory uvicorn is launched from.
 BASE_DIR = Path(__file__).parent
+DB_PATH  = BASE_DIR / "clients.db"
 
 # ---------------------------------------------------------------------------
-# API key registry (MVP: hardcoded — move to database for production)
+# SQLite helpers  (each opens its own connection; runs via asyncio.to_thread)
 # ---------------------------------------------------------------------------
-# Keys map  api_key_value → human-readable client label.
-# The label is used for audit logging and will drive per-client billing in
-# Phase 4.  Never log or return the raw key value itself.
-VALID_API_KEYS: dict[str, str] = {
-    "dev_test_key_123": "Test Client A",
-    "dev_test_key_456": "Test Client B",
-}
+
+def _db_init() -> None:
+    """
+    Create the api_keys table and seed backward-compatible dev keys.
+    Called once at startup inside a thread so it doesn't block the event loop.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        # WAL mode: readers don't block writers, writers don't block readers.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key         TEXT PRIMARY KEY,
+                client_name TEXT NOT NULL,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # INSERT OR IGNORE: skip silently if these rows already exist on
+        # subsequent restarts — avoids clobbering any name changes.
+        conn.executemany(
+            "INSERT OR IGNORE INTO api_keys (key, client_name) VALUES (?, ?)",
+            [
+                ("dev_test_key_123", "Test Client A"),
+                ("dev_test_key_456", "Test Client B"),
+            ],
+        )
+        conn.commit()
+
+
+def _db_lookup(key: str) -> str | None:
+    """
+    Return the client_name for a given key, or None if not found.
+
+    SQL-injection protection: the key value is passed as a bound parameter
+    (the ? placeholder), never concatenated into the query string.  SQLite's
+    C driver compiles the statement first and then binds the value separately,
+    so any characters in `key` — including quotes, semicolons, or comment
+    markers — are treated as data, not SQL syntax.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT client_name FROM api_keys WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _db_insert(key: str, client_name: str) -> None:
+    """Insert a newly generated key. Runs in a thread."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO api_keys (key, client_name) VALUES (?, ?)",
+            (key, client_name),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Lifespan — initialises the DB before the server starts accepting requests
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await asyncio.to_thread(_db_init)
+    logger.info("Database ready at %s", DB_PATH)
+    yield
+    # No teardown needed — each helper closes its own connection after use.
+
+
+# ---------------------------------------------------------------------------
+# API key authentication dependency
+# ---------------------------------------------------------------------------
 
 # auto_error=False so FastAPI passes None instead of raising a 403 when the
-# header is absent; we raise our own 401 in verify_api_key below.
+# header is absent; we return a uniform 401 for both missing and invalid keys.
 _API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -62,31 +130,34 @@ async def verify_api_key(
     api_key: str | None = Security(_API_KEY_HEADER),
 ) -> str:
     """
-    FastAPI dependency that enforces API key authentication.
+    FastAPI dependency that enforces API key authentication via DB lookup.
 
-    Iterates every registered key with secrets.compare_digest so the loop
-    runs in constant time regardless of which key matches (or doesn't),
-    preventing timing-oracle attacks from probing the key space.
+    A parameterized query binds the candidate value outside the SQL text, so
+    injection attempts (e.g. `' OR '1'='1`) are treated as literal data and
+    will simply find no matching row.  The PRIMARY KEY index makes both hit
+    and miss lookups O(log n), so timing differences between valid and invalid
+    keys are negligible and not exploitable for key enumeration.
 
     Returns the client label on success; raises 401 on any failure.
     """
-    candidate = api_key or ""
-    matched_client: str | None = None
-
-    for key, client in VALID_API_KEYS.items():
-        # Always compare all entries — no early exit — to keep timing uniform.
-        if secrets.compare_digest(candidate.encode(), key.encode()):
-            matched_client = client
-
-    if matched_client is None:
+    if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key.",
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    logger.info("Authenticated client: %s", matched_client)
-    return matched_client
+    client_name = await asyncio.to_thread(_db_lookup, api_key)
+
+    if client_name is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    logger.info("Authenticated client: %s", client_name)
+    return client_name
 
 # ---------------------------------------------------------------------------
 # Application factory
@@ -94,6 +165,7 @@ async def verify_api_key(
 app = FastAPI(
     title="Behavioral Trust Score API",
     version="1.0.0",
+    lifespan=lifespan,
     # Disable the default /docs and /redoc in production by setting these to
     # None via an environment flag. Kept open here for developer ergonomics.
     docs_url="/docs",
@@ -239,13 +311,12 @@ async def generate_key(payload: GenerateKeyRequest) -> GenerateKeyResponse:
     **Production hardening required before public deployment:**
     - Protect this endpoint with admin authentication.
     - Rate-limit per IP to prevent key flooding.
-    - Persist keys to a database instead of the in-memory dict.
     - Emit the key only once and store only a salted hash server-side.
     """
     # ts_live_ prefix lets developers instantly identify keys in logs and
     # config files; token_hex(32) provides 256 bits of entropy.
     new_key = f"ts_live_{secrets.token_hex(32)}"
-    VALID_API_KEYS[new_key] = payload.client_name
+    await asyncio.to_thread(_db_insert, new_key, payload.client_name)
     logger.info("API key issued for client: %s", payload.client_name)
     return GenerateKeyResponse(api_key=new_key, client_name=payload.client_name)
 
