@@ -1,25 +1,29 @@
 """
-Behavioral Trust Score API — Phase 3: Monetization & Access Control
---------------------------------------------------------------------
+Behavioral Trust Score API — Phase 6: Developer Dashboard
+----------------------------------------------------------
 Security posture:
-  • API key authentication via X-API-Key header guards the scored endpoint.
-    Missing or unrecognised keys return 401 before any evaluation logic runs.
-  • Keys are compared with secrets.compare_digest (constant-time) to prevent
-    timing-oracle attacks; all keys in the registry are always checked so the
-    iteration count does not reveal whether any key was close to valid.
-  • CORS allows X-API-Key in preflight so browser-based clients (Swagger UI,
-    web dashboards) can authenticate correctly alongside mobile clients.
-  • Remaining posture from Phase 2 is unchanged (allowlist CORS, global
-    exception handler, StrictBool telemetry validation, separate evaluator).
+  • GET / serves the single-page developer dashboard (FileResponse, same-
+    origin — the fetch calls from the page are not cross-origin so existing
+    CORS rules are not affected).
+  • POST /api/v1/generate-key is intentionally unauthenticated (it creates
+    keys, so it cannot require one). In production it MUST be protected by
+    admin auth and rate-limiting before this dict is replaced by a DB.
+  • Key generation uses secrets.token_hex(32) for 256 bits of entropy,
+    prefixed with "ts_live_" for easy visual identification in logs.
+  • In-memory dict assignment is GIL-serialised in CPython, but is not safe
+    across multiple uvicorn workers — use a shared store (Redis / DB) for
+    multi-worker deployments.
+  • All posture from Phase 3 is preserved unchanged.
 """
 
 import logging
 import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
@@ -33,6 +37,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("trust_api")
+
+# Directory that contains main.py — used to resolve index.html at runtime
+# regardless of the working directory uvicorn is launched from.
+BASE_DIR = Path(__file__).parent
 
 # ---------------------------------------------------------------------------
 # API key registry (MVP: hardcoded — move to database for production)
@@ -176,8 +184,74 @@ class TrustCheckResponse(BaseModel):
     timestamp: str
 
 
+class GenerateKeyRequest(BaseModel):
+    """Input schema for the key-generation endpoint."""
+
+    client_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Human-readable name for the registering client or company.",
+    )
+
+    @field_validator("client_name")
+    @classmethod
+    def strip_and_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("client_name cannot be blank or whitespace-only.")
+        return v
+
+
+class GenerateKeyResponse(BaseModel):
+    """Returned once on key creation — the raw key is never stored server-side."""
+
+    api_key: str
+    client_name: str
+
+
 # ---------------------------------------------------------------------------
-# Endpoint
+# Dashboard (serves index.html at the root)
+# ---------------------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+async def dashboard() -> FileResponse:
+    """
+    Developer dashboard SPA.  Served from the same origin as the API so
+    the fetch calls inside index.html are same-origin and bypass CORS entirely.
+    """
+    return FileResponse(BASE_DIR / "index.html")
+
+
+# ---------------------------------------------------------------------------
+# Key generation endpoint
+# ---------------------------------------------------------------------------
+@app.post(
+    "/api/v1/generate-key",
+    response_model=GenerateKeyResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a client and generate an API key",
+    response_description="The newly created API key (shown only once).",
+)
+async def generate_key(payload: GenerateKeyRequest) -> GenerateKeyResponse:
+    """
+    Registers a new client and returns a fresh, prefixed API key.
+
+    **Production hardening required before public deployment:**
+    - Protect this endpoint with admin authentication.
+    - Rate-limit per IP to prevent key flooding.
+    - Persist keys to a database instead of the in-memory dict.
+    - Emit the key only once and store only a salted hash server-side.
+    """
+    # ts_live_ prefix lets developers instantly identify keys in logs and
+    # config files; token_hex(32) provides 256 bits of entropy.
+    new_key = f"ts_live_{secrets.token_hex(32)}"
+    VALID_API_KEYS[new_key] = payload.client_name
+    logger.info("API key issued for client: %s", payload.client_name)
+    return GenerateKeyResponse(api_key=new_key, client_name=payload.client_name)
+
+
+# ---------------------------------------------------------------------------
+# Trust-check endpoint
 # ---------------------------------------------------------------------------
 @app.post(
     "/api/v1/trust-check",

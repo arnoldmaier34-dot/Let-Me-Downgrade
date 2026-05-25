@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trust Score API — Developer Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-full bg-slate-50 text-slate-900 antialiased">
+
+  <!-- ── Top navigation ─────────────────────────────────────────────────── -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-10">
+    <div class="max-w-3xl mx-auto px-6 h-14 flex items-center gap-3">
+
+      <!-- Logo mark -->
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+        <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24"
+             stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6
+                   11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623
+                   5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152
+                   c-3.196 0-6.1-1.248-8.25-3.285z" />
+        </svg>
+      </div>
+
+      <span class="font-semibold text-slate-800 text-sm">Trust Score API</span>
+      <span class="text-xs font-medium bg-indigo-50 text-indigo-700
+                   border border-indigo-200 px-2 py-0.5 rounded-full">
+        Developer Dashboard
+      </span>
+
+      <!-- Live status pill -->
+      <div class="ml-auto flex items-center gap-1.5">
+        <span class="relative flex h-2 w-2">
+          <span class="animate-ping absolute inline-flex h-full w-full
+                       rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+        </span>
+        <span class="text-xs text-slate-500">API Online</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main content ───────────────────────────────────────────────────── -->
+  <main class="max-w-3xl mx-auto px-6 py-12 space-y-6">
+
+    <!-- Page heading -->
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900 mb-1.5">Generate an API Key</h1>
+      <p class="text-slate-500 text-sm leading-relaxed">
+        Register your application to receive a unique API key. Include it in every
+        request as the
+        <code class="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded
+                     text-xs font-mono border border-slate-200">X-API-Key</code>
+        header.
+      </p>
+    </div>
+
+    <!-- ── Registration form card ──────────────────────────────────────── -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-7 max-w-md">
+      <div class="mb-5">
+        <label for="clientName"
+               class="block text-sm font-medium text-slate-700 mb-1.5">
+          Company or Application Name
+        </label>
+        <input
+          id="clientName"
+          type="text"
+          placeholder="e.g. Acme Security Suite"
+          autocomplete="off"
+          spellcheck="false"
+          class="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg
+                 shadow-sm placeholder:text-slate-400 transition
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500
+                 focus:border-indigo-500"
+        />
+        <p id="inputError" class="hidden mt-1.5 text-xs text-red-600">
+          Please enter a name before generating a key.
+        </p>
+      </div>
+
+      <button
+        id="generateBtn"
+        onclick="generateKey()"
+        class="w-full flex items-center justify-center gap-2 bg-indigo-600
+               hover:bg-indigo-700 active:bg-indigo-800 text-white text-sm
+               font-medium py-2.5 px-4 rounded-lg transition-colors
+               disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        <!-- Key icon (swapped for spinner while loading) -->
+        <svg id="btnIcon" class="w-4 h-4 shrink-0" fill="none"
+             viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912
+                   c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25
+                   H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499
+                   c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+        </svg>
+        <span id="btnText">Generate API Key</span>
+      </button>
+    </div>
+
+    <!-- ── Success card (hidden until key is generated) ────────────────── -->
+    <div id="successCard"
+         class="hidden bg-white rounded-xl border border-slate-200 shadow-sm
+                p-7 max-w-md transition-all">
+
+      <!-- Header row -->
+      <div class="flex items-start gap-3 mb-5">
+        <div class="w-8 h-8 rounded-full bg-emerald-50 border border-emerald-200
+                    flex items-center justify-center shrink-0">
+          <svg class="w-4 h-4 text-emerald-600" fill="none"
+               viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">API Key Created</p>
+          <p class="text-xs text-slate-500 mt-0.5">
+            Copy and store this key securely —
+            <span class="font-medium text-slate-700">it will not be shown again.</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Key display + copy button -->
+      <div class="bg-slate-50 rounded-lg border border-slate-200 px-4 py-3
+                  flex items-center gap-3 mb-1">
+        <span id="apiKeyDisplay"
+              class="font-mono text-sm text-slate-800 break-all flex-1 select-all">
+        </span>
+        <button id="copyBtn"
+                onclick="copyKey()"
+                title="Copy to clipboard"
+                class="shrink-0 text-slate-400 hover:text-indigo-600
+                       transition-colors focus:outline-none">
+          <svg id="copyIcon" class="w-4 h-4" fill="none"
+               viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75
+                     a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125
+                     1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375
+                     c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161
+                     -7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125
+                     .504-1.125 1.125v3.5m7.5 10.375H9.75a1.125 1.125 0
+                     01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0
+                     00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5
+                     a3.375 3.375 0 00-3.375-3.375H9.75" />
+          </svg>
+        </button>
+      </div>
+      <p id="copyFeedback" class="hidden text-xs text-emerald-600 mb-4 pl-1">
+        ✓ Copied to clipboard
+      </p>
+
+      <!-- curl quick-start snippet -->
+      <div class="mt-5 border-t border-slate-100 pt-5">
+        <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">
+          Quick Start
+        </p>
+        <div class="bg-slate-900 rounded-lg px-4 py-3.5 overflow-x-auto">
+          <pre id="curlSnippet"
+               class="font-mono text-xs text-slate-300 whitespace-pre leading-relaxed">
+          </pre>
+        </div>
+        <p class="mt-2 text-xs text-slate-400">
+          Replace <code class="text-slate-300">&lt;token&gt;</code> and
+          <code class="text-slate-300">&lt;nonce&gt;</code> with values from
+          your device client.
+        </p>
+      </div>
+    </div>
+
+    <!-- ── Error card (hidden until a request fails) ───────────────────── -->
+    <div id="errorCard"
+         class="hidden bg-white rounded-xl border border-red-200 shadow-sm
+                p-5 max-w-md">
+      <div class="flex items-start gap-3">
+        <div class="w-7 h-7 rounded-full bg-red-50 border border-red-200
+                    flex items-center justify-center shrink-0">
+          <svg class="w-3.5 h-3.5 text-red-600" fill="none"
+               viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-red-700">Request Failed</p>
+          <p id="errorMessage" class="text-xs text-red-600 mt-0.5"></p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <footer class="max-w-3xl mx-auto px-6 pb-10 mt-4">
+    <p class="text-xs text-slate-400">
+      Trust Score API · Phase 6 MVP ·
+      <a href="/docs" target="_blank"
+         class="underline hover:text-indigo-600 transition-colors">
+        OpenAPI Docs
+      </a>
+    </p>
+  </footer>
+
+  <!-- ── JavaScript ─────────────────────────────────────────────────────── -->
+  <script>
+    /* ── State ───────────────────────────────────────────────────────────── */
+    let currentKey = '';
+
+    const ICONS = {
+      key: `<path stroke-linecap="round" stroke-linejoin="round"
+                  d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912
+                     c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6
+                     v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499
+                     c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />`,
+
+      spinner: `<path stroke-linecap="round" stroke-linejoin="round"
+                     d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0
+                        h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7
+                        M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182
+                        m0-4.991v4.99" />`,
+
+      copy: `<path stroke-linecap="round" stroke-linejoin="round"
+                   d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75
+                      a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125
+                      1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375
+                      c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161
+                      -7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125
+                      .504-1.125 1.125v3.5m7.5 10.375H9.75a1.125 1.125 0
+                      01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0
+                      00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5
+                      a3.375 3.375 0 00-3.375-3.375H9.75" />`,
+
+      check: `<path stroke-linecap="round" stroke-linejoin="round"
+                    d="M4.5 12.75l6 6 9-13.5" />`,
+    };
+
+    /* ── Key generation ──────────────────────────────────────────────────── */
+    async function generateKey() {
+      const input      = document.getElementById('clientName');
+      const inputError = document.getElementById('inputError');
+      const name       = input.value.trim();
+
+      // Client-side validation
+      if (!name) {
+        inputError.classList.remove('hidden');
+        input.focus();
+        return;
+      }
+      inputError.classList.add('hidden');
+
+      // Hide previous result/error cards
+      document.getElementById('successCard').classList.add('hidden');
+      document.getElementById('errorCard').classList.add('hidden');
+
+      // Loading state
+      setButtonLoading(true);
+
+      try {
+        const res  = await fetch('/api/v1/generate-key', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ client_name: name }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          // Pull the detail field FastAPI puts in validation errors
+          const msg = Array.isArray(data.detail)
+            ? data.detail.map(e => e.msg).join('; ')
+            : (data.detail ?? `HTTP ${res.status}`);
+          throw new Error(msg);
+        }
+
+        showSuccess(data.api_key);
+
+      } catch (err) {
+        document.getElementById('errorMessage').textContent =
+          err.message || 'Could not connect to the API server. Is it running?';
+        document.getElementById('errorCard').classList.remove('hidden');
+      } finally {
+        setButtonLoading(false);
+      }
+    }
+
+    /* ── Display the success card with the new key ───────────────────────── */
+    function showSuccess(apiKey) {
+      currentKey = apiKey;
+
+      document.getElementById('apiKeyDisplay').textContent = apiKey;
+      document.getElementById('copyFeedback').classList.add('hidden');
+      document.getElementById('copyIcon').innerHTML = ICONS.copy;
+
+      // Build a curl snippet with the real key interpolated
+      document.getElementById('curlSnippet').textContent =
+`curl -X POST http://127.0.0.1:8000/api/v1/trust-check \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: ${apiKey}" \\
+  -d '{
+    "device_integrity_token": "<base64_token>",
+    "app_package_name": "com.your.app",
+    "nonce": "<random_nonce>"
+  }'`;
+
+      const card = document.getElementById('successCard');
+      card.classList.remove('hidden');
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    /* ── Copy to clipboard ───────────────────────────────────────────────── */
+    async function copyKey() {
+      if (!currentKey) return;
+
+      try {
+        await navigator.clipboard.writeText(currentKey);
+      } catch {
+        // Fallback: select the text so the user can copy manually
+        const el = document.getElementById('apiKeyDisplay');
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        return;
+      }
+
+      // Swap to check icon and show feedback
+      document.getElementById('copyIcon').innerHTML = ICONS.check;
+      const feedback = document.getElementById('copyFeedback');
+      feedback.classList.remove('hidden');
+
+      setTimeout(() => {
+        feedback.classList.add('hidden');
+        document.getElementById('copyIcon').innerHTML = ICONS.copy;
+      }, 2000);
+    }
+
+    /* ── Button loading helper ───────────────────────────────────────────── */
+    function setButtonLoading(loading) {
+      const btn  = document.getElementById('generateBtn');
+      const icon = document.getElementById('btnIcon');
+      const text = document.getElementById('btnText');
+
+      btn.disabled       = loading;
+      icon.innerHTML     = loading ? ICONS.spinner : ICONS.key;
+      text.textContent   = loading ? 'Generating…' : 'Generate API Key';
+
+      if (loading) {
+        // Rotate the spinner SVG with a CSS animation via inline style
+        icon.style.animation = 'spin 1s linear infinite';
+      } else {
+        icon.style.animation = '';
+      }
+    }
+
+    /* ── Allow Enter key to submit ───────────────────────────────────────── */
+    document.getElementById('clientName')
+      .addEventListener('keydown', e => { if (e.key === 'Enter') generateKey(); });
+  </script>
+
+  <!-- Tailwind doesn't include a spin keyframe by default via CDN play -->
+  <style>
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+
+</body>
+</html>
